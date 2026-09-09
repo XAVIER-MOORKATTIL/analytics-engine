@@ -1,11 +1,12 @@
 import os
+import time
 import pandas as pd
 import numpy as np
 from pymongo import MongoClient
 from sklearn.ensemble import IsolationForest
 from dotenv import load_dotenv
 
-# Load environment variables from backend .env file
+# Load environment variables from backend .env file (for local dev)
 load_dotenv(dotenv_path='../.env')
 
 MONGO_URI = os.getenv('MONGO_URI')
@@ -50,4 +51,16 @@ def fetch_and_analyze():
     print(df[['metricName', 'value', 'is_anomaly', 'timestamp']])
 
 if __name__ == '__main__':
-    fetch_and_analyze()
+    print("[Python Engine] Service Started. Polling MongoDB every 60 seconds...")
+    while True:
+        try:
+            fetch_and_analyze()
+        except Exception as e:
+            print(f"[Python Engine Error] {e}")
+        
+        # Keep process alive for Render by sleeping 60s between analysis cycles
+        time.sleep(60)
+
+
+
+        
