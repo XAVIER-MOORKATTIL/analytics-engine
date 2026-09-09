@@ -8,11 +8,15 @@ const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
 const Queue = require('bull');
 const nodemailer = require('nodemailer');
 const { Server } = require('socket.io');
+const telemetryRouter = require('./routes/telemetry');
+
+
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use('/api/telemetry', telemetryRouter);
 
 // HTTP Server & Socket.io Initialization
 const server = http.createServer(app);
