@@ -1,0 +1,4 @@
+node_modules
+.git
+data_engine/venv
+client/node_modules
