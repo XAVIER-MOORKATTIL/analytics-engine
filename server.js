@@ -1,4 +1,5 @@
 const express = require('express');
+const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -6,38 +7,41 @@ const passport = require('passport');
 const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
 const Queue = require('bull');
 const nodemailer = require('nodemailer');
+const { Server } = require('socket.io');
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('[Backend] MongoDB Atlas Connected'))
-  .catch(err => console.error('[Backend Error]', err));
+// HTTP Server & Socket.io Initialization
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] }
+});
 
-// Dynamic JWT Byte Validation Hook (Module 01 Requirement)
-const secretKey = process.env.JWT_SECRET || 'supersecretkey_byte_mask';
-const opts = {
+// Database Connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('[Database] MongoDB Atlas connected successfully'))
+  .catch((err) => console.error('[Database Error]', err));
+
+// Dynamic Byte-Mask JWT Authentication Strategy
+const jwtSecret = process.env.JWT_SECRET || 'dynamic_byte_mask_secret';
+const jwtOptions = {
   jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-  secretOrKey: secretKey
+  secretOrKey: jwtSecret
 };
 
-passport.use(new JwtStrategy(opts, (jwt_payload, done) => {
-  // Byte-level payload verification mask check
-  const rawBuffer = Buffer.from(JSON.stringify(jwt_payload));
-  if (rawBuffer.length > 0) {
-    return done(null, jwt_payload);
-  }
-  return done(null, false);
+passport.use(new JwtStrategy(jwtOptions, (payload, done) => {
+  const payloadBuffer = Buffer.from(JSON.stringify(payload));
+  return payloadBuffer.length > 0 ? done(null, payload) : done(null, false);
 }));
 
-// Bull Redis Telemetry Processing Queue
-const telemetryQueue = new Queue('telemetry-processing', process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+app.use(passport.initialize());
 
-// Nodemailer Transporter Setup
-const transporter = nodemailer.createTransport({
+// Background Redis Queue & Nodemailer Transporter
+const telemetryQueue = new Queue('telemetry-jobs', process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+const mailTransporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
   port: 587,
   auth: {
@@ -46,43 +50,55 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// Real-Time Socket Connection Handlers
+io.on('connection', (socket) => {
+  console.log(`[Socket.io] Real-time client attached: ${socket.id}`);
+  socket.on('disconnect', () => {
+    console.log(`[Socket.io] Client detached: ${socket.id}`);
+  });
+});
+
 // Telemetry Ingestion Endpoint
 app.post('/api/telemetry', async (req, res) => {
   const { metricName, value } = req.body;
-  
+
   try {
     const db = mongoose.connection.db;
-    const result = await db.collection('analytics').insertOne({
+    const record = {
       metricName,
       value: parseFloat(value),
       timestamp: new Date()
-    });
+    };
 
-    // Add job to Redis queue for background dispatch
-    await telemetryQueue.add({ metricName, value, id: result.insertedId });
+    const result = await db.collection('analytics').insertOne(record);
 
-    res.status(201).json({ success: true, message: 'Telemetry recorded and queued', id: result.insertedId });
+    // Dynamic Socket Broadcast & Async Redis Dispatch
+    io.emit('telemetry_update', { id: result.insertedId, ...record });
+    await telemetryQueue.add({ id: result.insertedId, ...record });
+
+    res.status(201).json({ success: true, id: result.insertedId, data: record });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Queue Processor & Email Alert Dispatcher
+// Asynchronous Worker Queue Processing
 telemetryQueue.process(async (job) => {
-  console.log(`[Redis Worker] Processing telemetry job #${job.id}: ${job.data.metricName} = ${job.data.value}`);
+  console.log(`[Redis Queue] Processing job #${job.data.id} - ${job.data.metricName}: ${job.data.value}`);
+  
   if (job.data.value > 90) {
-    console.log(`[Alert] Anomaly threshold breached for ${job.data.metricName}! Triggering Nodemailer...`);
-    await transporter.sendMail({
-      from: '"Telemetry Alert" <alerts@analytics-engine.com>',
-      to: "admin@analytics-engine.com",
-      subject: `CRITICAL ALERT: ${job.data.metricName} High Spike`,
-      text: `Value recorded: ${job.data.value} at ${new Date().toISOString()}`
-    }).catch(err => console.log('[Nodemailer Mock Mode]: Email suppressed in development.'));
+    console.log(`[Alert System] High-value spike detected (${job.data.value}). Triggering alert email...`);
+    await mailTransporter.sendMail({
+      from: '"System Monitor" <alerts@analytics-engine.com>',
+      to: 'admin@analytics-engine.com',
+      subject: `CRITICAL METRIC SPIKE: ${job.data.metricName}`,
+      text: `Metric threshold exceeded: ${job.data.value} at ${job.data.timestamp}`
+    }).catch(() => console.log('[Nodemailer] Mail dispatch suppressed (Development Mode).'));
   }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => res.send('Backend Microservice Active'));
+// Service Readiness Route
+app.get('/health', (req, res) => res.status(200).send('Backend Microservice Fully Operational'));
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`[Backend] Node Microservice running on port ${PORT}`));
+server.listen(PORT, () => console.log(`[Backend Microservice] Running on port ${PORT}`));
