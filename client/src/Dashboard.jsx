@@ -1,85 +1,84 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import API from './api';
-import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts';
 
 export default function Dashboard({ onLogout }) {
-  const [metrics, setMetrics] = useState([]);
   const [metricName, setMetricName] = useState('CPU_Usage');
   const [value, setValue] = useState('');
+  const [status, setStatus] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const fetchMetrics = async () => {
-    try {
-      const res = await API.get('/analytics');
-      const formattedData = res.data.data.map(m => ({
-        ...m,
-        time: new Date(m.timestamp).toLocaleTimeString()
-      })).reverse();
-      setMetrics(formattedData);
-    } catch (err) {
-      console.error(err.response?.data?.message || 'Failed to fetch metrics');
-    }
-  };
-
-  useEffect(() => {
-    fetchMetrics();
-  }, []);
-
-  const handleLogMetric = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!value) return;
+    setLoading(true);
+    setStatus('Dispatching payload to Node.js backend...');
+
     try {
-      await API.post('/analytics', {
+      const res = await API.post('/api/telemetry', {
         metricName,
         value: parseFloat(value),
-        tags: ['frontend', 'live']
       });
-      setValue('');
-      fetchMetrics();
+
+      if (res.data.success) {
+        setStatus(`Payload queued in Redis queue! Job ID: ${res.data.id}`);
+        setValue('');
+      } else {
+        setStatus(`Submission failed: ${res.data.error}`);
+      }
     } catch (err) {
-      console.error(err.response?.data?.message || 'Log failed');
+      setStatus(`Error: ${err.response?.data?.message || err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto' }}>
+    <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '650px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>Telemetry Analytics Dashboard</h2>
-        <button onClick={onLogout} style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}>Logout</button>
+        <h2>Telemetry Control Center</h2>
+        <button onClick={onLogout} style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}>
+          Logout
+        </button>
       </div>
+      
+      <p style={{ color: '#666' }}>Connected to Multi-Service ML & Async Analytics Engine</p>
 
-      <form onSubmit={handleLogMetric} style={{ display: 'flex', gap: '1rem', margin: '1.5rem 0' }}>
-        <input 
-          type="text" 
-          value={metricName} 
-          onChange={(e) => setMetricName(e.target.value)} 
-          placeholder="Metric Name" 
-          required 
-          style={{ padding: '0.5rem' }}
-        />
-        <input 
-          type="number" 
-          value={value} 
-          onChange={(e) => setValue(e.target.value)} 
-          placeholder="Value (e.g., 65.4)" 
-          step="0.1" 
-          required 
-          style={{ padding: '0.5rem' }}
-        />
-        <button type="submit" style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}>Submit Metric</button>
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.5rem' }}>Select Metric</label>
+          <select 
+            value={metricName} 
+            onChange={(e) => setMetricName(e.target.value)}
+            style={{ width: '100%', padding: '0.5rem' }}
+          >
+            <option value="CPU_Usage">CPU_Usage</option>
+            <option value="Memory_Pressure">Memory_Pressure</option>
+            <option value="Network_I/O">Network_I/O</option>
+          </select>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.5rem' }}>Metric Value</label>
+          <input 
+            type="number" 
+            step="0.01" 
+            value={value} 
+            onChange={(e) => setValue(e.target.value)} 
+            required 
+            placeholder="e.g. 92.4"
+            style={{ width: '100%', padding: '0.5rem' }}
+          />
+        </div>
+
+        <button type="submit" disabled={loading} style={{ padding: '0.75rem', cursor: 'pointer', fontWeight: 'bold' }}>
+          {loading ? 'Processing...' : 'Send Telemetry Metric'}
+        </button>
       </form>
 
-      <h3>Real-Time Metrics Visualization</h3>
-      <div style={{ width: '100%', height: 300, background: '#f8f9fa', padding: '1rem', borderRadius: '8px' }}>
-        <ResponsiveContainer>
-          <LineChart data={metrics}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="time" />
-            <YAxis />
-            <Tooltip />
-            <Line type="monotone" dataKey="value" stroke="#8884d8" strokeWidth={2} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
+      {status && (
+        <div style={{ marginTop: '1.5rem', padding: '1rem', background: '#f4f4f4', borderRadius: '4px', borderLeft: '4px solid #007bff' }}>
+          <strong>System Log:</strong> {status}
+        </div>
+      )}
     </div>
   );
 }
